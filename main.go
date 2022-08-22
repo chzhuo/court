@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -20,45 +19,50 @@ import (
 
 var feishu string
 
-func sendMsg(msg string) {
+func sendMsg(msg string) error {
 	// json
 	contentType := "application/json"
 	// data
 	data := map[string]interface{}{
 		"msg_type": "text",
 		"content": map[string]interface{}{
-			"text": fmt.Sprintf("文体中心羽毛球夜晚场地更新：\n %s", msg),
+			"text": fmt.Sprintf("文体中心羽毛球夜晚场地更新：\n%s", msg),
 		},
 	}
 
 	bs, err := json.Marshal(data)
 	if err != nil {
 		fmt.Println(err)
+		return err
 	}
 	logrus.Infof("send msg: %s", string(bs))
 	// request
 	result, err := http.Post(feishu, contentType, bytes.NewReader(bs))
 	if err != nil {
 		fmt.Printf("post failed, err:%v\n", err)
-		return
+		return err
 	}
 	defer result.Body.Close()
 
 	if result.StatusCode/100 != 2 {
 		fmt.Printf("post failed, status:%v\n", result.StatusCode)
-		return
+		return fmt.Errorf("post failed, status:%v", result.StatusCode)
 	}
+	return nil
 }
 
-var preMsg string
+var preMsg = "fake msg"
 
 func sendAlert(alertInfo []string) {
 	msg := strings.Join(alertInfo, "\n")
 	if preMsg == msg {
 		return
 	}
+	err := sendMsg(msg)
+	if err != nil {
+		logrus.Errorf("send msg: %v", err)
+	}
 	preMsg = msg
-	sendMsg(msg)
 }
 
 func check() {
@@ -74,8 +78,8 @@ func check() {
 		fmt.Println(url)
 		res, err := http.Get(url)
 		if err != nil {
-			log.Fatal(err)
 			logrus.Errorf("get: %v", err)
+			return
 		}
 		defer res.Body.Close()
 		if res.StatusCode != 200 {
