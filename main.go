@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"math/rand"
 	"net/http"
 	"strings"
 	"time"
@@ -75,13 +76,28 @@ func check() {
 
 	dates := make([]string, 0)
 	currentDateIndex := -1
+	var preUrl string
+	var cookie []*http.Cookie
+
 	for {
 		url := fmt.Sprintf("https://xihuwenti.juyancn.cn/wechat/product/details?id=%d", pageId)
 		if currentDateIndex >= 0 {
 			url = fmt.Sprintf("%s&time=%s", url, dates[currentDateIndex])
 		}
 		logrus.WithField("url", url).Info("fetch page")
-		res, err := http.Get(url)
+		req, err := http.NewRequest(http.MethodGet, url, nil)
+		if err != nil {
+			logrus.WithField("url", url).WithError(err).Error("new request error")
+		}
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/104.0.0.0 Safari/537.36")
+		req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9")
+		if preUrl != "" {
+			req.Header.Set("Refer", preUrl)
+		}
+		for _, c := range cookie {
+			req.AddCookie(c)
+		}
+		res, err := http.DefaultClient.Do(req)
 		if err != nil {
 			logrus.WithField("url", url).WithError(err).Error("get page error")
 			return
@@ -90,6 +106,9 @@ func check() {
 		if res.StatusCode != 200 {
 			logrus.WithField("url", url).WithField("status", res.Status).Error("status code error")
 			return
+		}
+		if cookie == nil {
+			cookie = res.Cookies()
 		}
 
 		// Load the HTML document
@@ -149,11 +168,15 @@ func check() {
 		if currentDateIndex >= len(dates) {
 			break
 		}
+		preUrl = url
 		time.Sleep(time.Duration(interval) * time.Second)
 	}
 	sendAlert(alertInfo)
 }
 
+func init() {
+	rand.Seed(time.Now().UnixNano())
+}
 func main() {
 	start := "18:00"
 	end := "23:00"
@@ -178,6 +201,6 @@ func main() {
 
 	for {
 		check()
-		time.Sleep(time.Second * time.Duration(interval))
+		time.Sleep(time.Second * time.Duration(rand.Intn(interval)))
 	}
 }
