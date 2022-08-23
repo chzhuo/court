@@ -65,42 +65,49 @@ func sendAlert(alertInfo []string) {
 	preMsg = msg
 }
 
+var pageId = 753
+var interval = 5
+var startTime time.Time
+var endTime time.Time
+
 func check() {
-	today, err := time.ParseInLocation("2006-01-02", time.Now().Format("2006-01-02"), time.Local)
-	if err != nil {
-		logrus.Errorf("parse day: %v", err)
-		return
-	}
 	alertInfo := make([]string, 0)
-	for i := 0; i < 5; i++ {
-		t := today.Add(time.Hour * 24 * time.Duration(i))
-		url := fmt.Sprintf("https://xihuwenti.juyancn.cn/wechat/product/details?id=753&time=%d", t.Unix())
-		fmt.Println(url)
+
+	dates := make([]string, 0)
+	currentDateIndex := -1
+	for {
+		url := fmt.Sprintf("https://xihuwenti.juyancn.cn/wechat/product/details?id=%d", pageId)
+		if currentDateIndex >= 0 {
+			url = fmt.Sprintf("%s&time=%s", url, dates[currentDateIndex])
+		}
+		logrus.WithField("url", url).Info("fetch page")
 		res, err := http.Get(url)
 		if err != nil {
-			logrus.Errorf("get: %v", err)
+			logrus.WithField("url", url).WithError(err).Error("get page error")
 			return
 		}
 		defer res.Body.Close()
 		if res.StatusCode != 200 {
-			logrus.Errorf("status code error: %d %s", res.StatusCode, res.Status)
+			logrus.WithField("url", url).WithField("status", res.Status).Error("status code error")
 			return
 		}
 
 		// Load the HTML document
 		doc, err := goquery.NewDocumentFromReader(res.Body)
 		if err != nil {
-			logrus.Errorf("new document: %v", err)
+			logrus.WithField("url", url).WithError(err).Errorf("parse document")
 			return
 		}
 
-		thresholdT, err := time.Parse("15:04", "18:00")
-		if err != nil {
-			logrus.Errorf("parse start time: %v", err)
-			return
+		texts := make([]string, 0)
+		for _, n := range doc.Find(".date-box .cur span").Nodes {
+			for c := n.FirstChild; c != nil; c = c.NextSibling {
+				texts = append(texts, c.Data)
+			}
 		}
+		currentDateText := strings.Join(texts, " ")
 
-		// Find the review items
+		// Find the available court items
 		doc.Find(".can-select").Each(func(i int, s *goquery.Selection) {
 			start, _ := s.Attr("data-start")
 			end, _ := s.Attr("data-end")
@@ -111,21 +118,63 @@ func check() {
 				logrus.Errorf("parse start time: %v", err)
 				return
 			}
-			if startT.Sub(thresholdT) >= 0 {
-				info := fmt.Sprintf("星期%d, %s-%s %s", int(t.Weekday()), start, end, hall)
+			endT, err := time.Parse("15:04", end)
+			if err != nil {
+				logrus.Errorf("parse end time: %v", err)
+				return
+			}
+			if startT.Sub(startTime) >= 0 && endT.Sub(endTime) <= 0 {
+				info := fmt.Sprintf("%s, %s-%s %s", currentDateText, start, end, hall)
 				alertInfo = append(alertInfo, info)
 			}
 		})
-		logrus.Infof("check %s", t.Format("2006-01-02 15:04:05"))
+
+		// Find the date items
+		if currentDateIndex == -1 {
+			doc.Find(".date-box li").Each(func(i int, s *goquery.Selection) {
+				if s.HasClass("cur") {
+					return
+				}
+				date, ok := s.Attr("data-time")
+				if ok {
+					dates = append(dates, date)
+				} else {
+					logrus.WithField("url", url).Warn("not founed the date-time attribute")
+				}
+			})
+		}
+		logrus.Infof("check done %s", currentDateText)
+
+		currentDateIndex++
+		if currentDateIndex >= len(dates) {
+			break
+		}
+		time.Sleep(time.Duration(interval) * time.Second)
 	}
 	sendAlert(alertInfo)
 }
 
 func main() {
-	interval := 60
+	start := "18:00"
+	end := "23:00"
 	flag.IntVar(&interval, "interval", interval, "check interval")
+	flag.IntVar(&pageId, "pageID", pageId, "page id, 753:羽毛球")
 	flag.StringVar(&feishu, "feishu", "", "feishu webhook url")
+	flag.StringVar(&start, "start", start, "court start time")
+	flag.StringVar(&end, "end", end, "court end time")
 	flag.Parse()
+
+	var err error
+	startTime, err = time.Parse("15:04", start)
+	if err != nil {
+		logrus.WithError(err).Errorf("parse start time")
+		return
+	}
+	endTime, err = time.Parse("15:04", end)
+	if err != nil {
+		logrus.WithError(err).Errorf("parse end time")
+		return
+	}
 
 	for {
 		check()
